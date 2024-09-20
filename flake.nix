@@ -27,6 +27,7 @@
             rust-analyzer
             rustfmt
             clippy
+	    redis
           ] ++ cargoBuildInputs;
 
         nodePkgs = pkgs.nodePackages_latest;
@@ -50,6 +51,14 @@
 
             buildInputs = with pkgs; [
 	    ] ++ rustBuildInputs ++ nodeBuildInputs;
+
+            text = ''
+              echo "Starting Redis..."
+              redis-server --daemonize yes
+              REDIS_PID=$!
+              echo "$REDIS_PID"
+              echo "Started redis with pid $REDIS_PID"
+            '';
           };
 
           packages = {
