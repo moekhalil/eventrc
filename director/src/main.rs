@@ -1,91 +1,96 @@
-extern crate redis;
-
+#![allow(dead_code)]
 
 use redis::{Commands, FromRedisValue};
 
-#[allow(dead_code)]
-fn main() {
-    let doc_key2 = "test_doc_3";
-    let doc_key3 = "test_doc_3";
-    let doc_content = "test_doc_3 says Hello, world! From Redis!";
+mod utils;
+use utils::redis_stream;
+use utils::redis_docs;
 
-    let client = redis::Client::open("redis://127.0.0.1/").unwrap();
+extern crate redis;
+
+
+// main function to write string:string key value pair to redis
+#[tokio::main]
+async fn main() {
+    let client: redis::Client = redis::Client::open("redis://127.0.0.1/").unwrap();
     let mut con = client.get_connection().unwrap();
 
-    let res: Result<String, redis::RedisError> = con.set(doc_key3, doc_content);
-    match res {
-        Ok(_) => println!("{} => {}", doc_key3, "Saved!"),
-        Err(e) => println!("Error: {}", e),
+    print_redis_docs(&mut con).await;
+    create_event_in_stream(&mut con).await;
+    print_stream_events(&mut con).await;
+}
+
+async fn create_event_in_stream(con: &mut redis::Connection) {
+    let stream_key = "mystream2";
+    let event = redis_stream::Event {
+        event_type: "my_event".to_string(),
+        data: serde_json::json!({
+            "name": "Moe",
+            "age": 35,
+        }),
+    };
+    redis_stream::write_event(con, stream_key, &event).await.unwrap();
+}
+
+async fn print_stream_events(con: &mut redis::Connection) {
+    let stream_key = "mystream2";
+    let count = 10;
+    let mystream_results = redis_stream::read_events(con, stream_key, count);
+    let results = mystream_results.await.unwrap();
+    println!("Printing events");
+    for result in results {
+        println!("{:?}", serde_json::to_string(&result).unwrap());
     }
-
-    let result: String = con.get(doc_key2).unwrap();
-
-    println!("{} => {}", doc_key2, result);
-
 }
 
-#[allow(dead_code)]
-fn get_value_for_key(key: ValueKey) {
-
-    let client = redis::Client::open("redis://127.0.0.1/").unwrap();
-    let mut con = client.get_connection().unwrap();
-
-    let result: String = con.get(key.key).unwrap();
-
-    println!("{} => {}", key.key, result);
-
+async fn print_redis_docs(con: &mut redis::Connection) {
+    let key = "settings:my_setting";
+    let value = serde_json::json!({
+        "name": "My Setting",
+        "value": 42,
+    });
+    redis_docs::set_one(con, key, value).unwrap();
+    let result = redis_docs::get_one(con, key).unwrap();
+    println!("Setting: {:?}", result);
 }
 
-#[allow(dead_code)]
-fn get_all_keys() {
 
-    let client = redis::Client::open("redis://127.0.0.1/").unwrap();
-    let mut con = client.get_connection().unwrap();
-
-    let keys: Vec<String> = con.keys("*").unwrap();
-
-    println!("Keys: {:?}", keys);
-}
-
-#[allow(dead_code)]
+// function to write a key value pair to redis that is a string:hashmap
+// good for storing json objects
 fn xadd_to_redis() {
 
     let client = redis::Client::open("redis://127.0.0.1/").unwrap();
     let mut con = client.get_connection().unwrap();
 
-    let res: Result<String, redis::RedisError> = con.xadd("mystream", "*", &[("name", "moe"), ("gender", "male")]);
+    let res: Result<String, redis::RedisError> = con.xadd(
+        "mystream",
+        "*",
+        &[("name", "moe"), ("gender", "male")]
+    );
     match res {
         Ok(_) => println!("{} => {}", "mystream", "Saved!"),
         Err(e) => println!("Error: {}", e),
     }
 
-    // print the stream
-    let res:  Vec<Vec<(String, Vec<Vec<(String, Vec<(String, String)>)>>)>> = FromRedisValue::from_redis_value(&con.xread(&["mystream"], &["0"]).unwrap()).unwrap();
-    res.iter().for_each(|x| {
-        x.iter().for_each(|stream| {
-            let stream_name = stream.0.as_str();
-            println!("Stream: {:?}", stream_name);
+    // read the stream
+    let xread_result = con.xread(&["mystream"], &["0"]).unwrap();
 
-            let stream_body = &stream.1;
-            stream_body.iter().for_each(|message| {
-                message.iter().for_each(|doc| {
-                    let document_id = doc.0.as_str();
-                    println!("Document ID: {:?}", document_id);
+    // parse the result
+    let res: Vec<(String, Vec<(String, Vec<(String, String)>)>)> =
+        FromRedisValue::from_redis_value(&xread_result).unwrap();
 
-                    doc.1.iter().for_each(|field| {
-                        let field_name = field.0.as_str();
-                        println!("Field Name: {:?}", field_name);
-
-                        let field_value = field.1.as_str();
-                        println!("Field Value: {:?}", field_value);
-                    });
-
-                    print!("=====================\n");
-                });
-            });
-        });
-    });
-    println!("Stream: {:?}", res);
+    // print the result
+    for (stream_name, stream_body) in res {
+        println!("Stream: {:?}", stream_name);
+        for (document_id, fields) in stream_body {
+            println!("Document ID: {:?}", document_id);
+            for (field_name, field_value) in fields {
+                println!("Field Name: {:?}", field_name);
+                println!("Field Value: {:?}", field_value);
+            }
+            println!("=====================");
+        }
+    }
 }
 
 struct ValueKey <'a> {
@@ -93,11 +98,4 @@ struct ValueKey <'a> {
     // define a optional value property
     #[allow(dead_code)]
     value: Option<String>,
-}
-
-fn __main() {
-    xadd_to_redis();
-    get_all_keys();
-    let dbkey = ValueKey { key: "mystream", value: None };
-    get_value_for_key(dbkey)
 }
